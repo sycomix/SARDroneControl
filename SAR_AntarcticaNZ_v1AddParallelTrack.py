@@ -10,14 +10,14 @@ import time
 import math
 from pymavlink import mavutil
 
+
 #########################################
 #
 # DRONE PROPERTIES
 #
 #########################################
 
-dFSA = 30   # Functional Search Area (m)
-
+dFSA = 10   # Functional Search Area (m)
 
 #########################################
 #
@@ -76,70 +76,6 @@ def get_location_metres(original_location, dNorth, dEast):
     newlon = original_location.lon + (dLon * 180/math.pi)
     return LocationGlobal(newlat, newlon,original_location.alt)
 
-
-def getSSMeters(aLocation, alpha, Radius, turn):
-    """
-    Returns a LocationGlobal object containing the latitude/longitude values of the next position in the sector search
-    """
-    earth_radius=6378137.0 #Radius of "spherical" earth
-    
-    if turn == 0:
-            #Coordinate offsets in radians
-            bearing = math.radians(alpha - 180 + 60)
-            if bearing >=360:
-                bearing += 360
-            Lat = (Radius * math.sin(bearing)) / earth_radius
-            Lon = (Radius * math.cos(bearing)) / earth_radius
-    #
-    elif turn == 1:
-            #Coordinate offsets in radians
-            bearing = math.radians(alpha + 180 - 60)
-            if bearing >=360:
-                bearing += 360
-            Lat = (Radius * math.sin(bearing)) / earth_radius
-            Lon = (Radius * math.cos(bearing)) / earth_radius
-
-    #New position in decimal degrees
-    newlat = aLocation.lat + (Lat * 180/math.pi)
-    newlon = aLocation.lon + (Lon * 180/math.pi)
-    return LocationGlobal(newlat, newlon, aLocation.alt)
-
-
-
-def condition_yaw(heading, relative=False):
-    if relative:
-        is_relative=1 #yaw relative to direction of travel
-    else:
-        is_relative=0 #yaw is an absolute angle
-    # create the CONDITION_YAW command using command_long_encode()
-    msg = vehicle.message_factory.command_long_encode(
-       0, 0,    # target system, target component
-        mavutil.mavlink.MAV_CMD_CONDITION_YAW, #command
-        0, #confirmation
-        heading,    # param 1, yaw in degrees
-        0,          # param 2, yaw speed deg/s
-        1,          # param 3, direction -1 ccw, 1 cw
-        is_relative, # param 4, relative offset 1, absolute angle 0
-        0, 0, 0)    # param 5 ~ 7 not used
-    # send command to vehicle
-    vehicle.send_mavlink(msg)
-
-def get_bearing(aLocation1, aLocation2):
-    """
-    Returns the bearing between the two LocationGlobal objects passed as parameters.
-
-    This method is an approximation, and may not be accurate over large distances and close to the
-    earth's poles. It comes from the ArduPilot test code:
-    https://github.com/diydrones/ardupilot/blob/master/Tools/autotest/common.py
-    """
-    
-    off_x = aLocation2.lon - aLocation1.lon
-    off_y = aLocation2.lat - aLocation1.lat
-    bearing = math.degrees(math.atan2(off_y, off_x))
-    
-    if bearing < 0:
-        bearing += 360.00
-    return bearing;
 
 def get_distance_metres(aLocation1, aLocation2):
     """
@@ -215,6 +151,63 @@ def adds_square_mission(aLocation, aSize):
     print " Upload new commands to vehicle"
     cmds.upload()
 
+###################
+# SEARCH PATTERNS #
+###################
+
+def addsParallelTrack(Area, initPoint, alt):
+    """
+        Adds a takeoff command and four waypoint commands to the current mission.
+        The waypoints are positioned to form a square of side length 2*aSize around the specified LocationGlobal (aLocation).
+        The function assumes vehicle.commands matches the vehicle mission state
+        (you must have called download at least once in the session and after clearing the mission)
+        """
+    
+    cmds = vehicle.commands
+    
+    print " Clear any existing commands"
+    cmds.clear()
+    
+    print " Define/add new commands."
+    # Add new commands. The meaning/order of the parameters is documented in the Command class.
+
+    #Calculate track properties
+    trackLength = 2 * math.sqrt(dFSA/math.pi) 
+    legConst = 5                                                    #Arbitrary ratio of leg length to track length 
+    legLength = legConst * trackLength             #Leg length function of dFSA radius 
+    numLegs = Area / (trackLength  * legLength)
+    print "trackLength: %s" % (trackLength)
+    print "legLength: %s" % (legLength)
+    print "numLegs: %s" % (numLegs)
+
+    #Add MAV_CMD_NAV_TAKEOFF command. This is ignored if the vehicle is already in the air.
+    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, 0, alt))
+
+    #Go to initial point as specified by user
+    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, initPoint.lat, initPoint.lon, alt))
+    
+    #Define waypoint pattern - point(lat, long, alt)
+    i = 1;
+    waypoint = initPoint
+    while i <= numLegs :
+        # Strafe 
+        waypoint = get_location_metres(waypoint, 0, (legLength*(-1)**i))
+        cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
+        # Advance
+        waypoint = get_location_metres(waypoint, trackLength, 0)
+        cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
+        i += 1
+
+    # Return to Launch
+    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, initPoint.lat, initPoint.lon, alt))
+     
+    print " Upload new commands to vehicle"
+    cmds.upload()
+
+
+
+    
+    
 def arm_and_takeoff(aTargetAltitude):
     """
     Arms vehicle and fly to aTargetAltitude.
@@ -249,172 +242,6 @@ def arm_and_takeoff(aTargetAltitude):
         time.sleep(1)
 
 
-###################
-# SEARCH PATTERNS #
-###################
-
-def addsParallelTrack(Area, initPoint, alt):
-    """
-        Adds a takeoff command and four waypoint commands to the current mission.
-        The waypoints are positioned to form a square of side length 2*aSize around the specified LocationGlobal (aLocation).
-        The function assumes vehicle.commands matches the vehicle mission state
-        (you must have called download at least once in the session and after clearing the mission)
-        """
-    
-    cmds = vehicle.commands
-    
-    print " Clear any existing commands"
-    cmds.clear()
-    
-    print " Define/add new commands."
-    # Add new commands. The meaning/order of the parameters is documented in the Command class.
-
-    #Calculate track properties
-    trackLength = 2 * math.sqrt(dFSA/math.pi) 
-    legConst = 5                                                    #Arbitrary ratio of leg length to track length 
-    legLength = legConst * trackLength                              #Leg length function of dFSA radius 
-    numLegs = Area / (trackLength  * legLength)
-
-    #Add MAV_CMD_NAV_TAKEOFF command. This is ignored if the vehicle is already in the air.
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, 0, alt))
-
-    #Go to initial point as specified by user
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, initPoint.lat, initPoint.lon, alt))
-    
-    #Define waypoint pattern - point(lat, long, alt)
-    i = 1;
-    waypoint = initPoint
-    while i <= numLegs :
-        # Strafe 
-        waypoint = get_location_metres(waypoint, 0, (legLength*(-1)**i))
-        cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
-        # Advance
-        waypoint = get_location_metres(waypoint, trackLength, 0)
-        cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
-        i += 1
-
-    # Return to Launch
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, initPoint.lat, initPoint.lon, alt))
-     
-    print " Upload new commands to vehicle"
-    cmds.upload()
-
-
-
-def addsSectorSearch(Area, initPoint, alt):
-    """
-    Adds mission to perform sector search across specified area.
-        """
-    
-    cmds = vehicle.commands
-    
-    print " Clear any existing commands"
-    cmds.clear()
-    
-    print " Define/add new commands."
-    # Add new commands. The meaning/order of the parameters is documented in the Command class.
-    
-    #Add MAV_CMD_NAV_TAKEOFF command. This is ignored if the vehicle is already in the air.
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, 0, alt))
-    
-    #Define waypoint pattern - point(lat, long, alt)
-
-    #Initial waypoint
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, initPoint.lat, initPoint.lon, alt))
-    currLocation = initPoint
-    
-    #Initial direction 
-    alpha = 90
-
-    #Area radius
-    Radius = math.sqrt(Area/math.pi)
-    
-    # 1st waypoint
-    waypoint = get_location_metres(currLocation, Radius*math.cos(alpha), Radius*math.sin(alpha))
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
-    alpha = get_bearing(currLocation, waypoint)
-    currLocation = waypoint
-    tri = 1
-
-    # Sector Search
-    while tri <= 3 :
-
-        triCnr = 1
-        while triCnr < 3:
-            waypoint = getSSMeters(currLocation, alpha, Radius, 1)
-            cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
-            alpha = get_bearing(currLocation, waypoint)
-            currLocation = waypoint
-            triCnr += 1
-
-        tri += 1
-        if tri != 4:
-            waypoint = getSSMeters(currLocation, alpha,Radius , 0)
-            cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
-            alpha = get_bearing(currLocation, waypoint)
-            currLocation = waypoint
-        
-    # Return to Launch
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, initPoint.lat, initPoint.lon, alt))
-     
-    print " Upload new commands to vehicle"
-    cmds.upload()
-    
-
-def addsExpandSquare(initPoint, Area, alt):
-    """
-     Adds mission to expanding square search search across specified area.
-        """
-    
-    cmds = vehicle.commands
-    
-    print " Clear any existing commands"
-    cmds.clear()
-    
-    print " Define/add new commands."
-    # Add new commands. The meaning/order of the parameters is documented in the Command class.
-
-    #Determine number of loops - Square search area
-    Radius = math.sqrt(dFSA / math.pi)
-    numLoops = math.sqrt(Area) /  Radius
-
-    #Add MAV_CMD_NAV_TAKEOFF command. This is ignored if the vehicle is already in the air.
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, 0, alt))
-
-    #Initial Waypoint - Centre of search area
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, initPoint.lat, initPoint.lon, alt))
-       
-    #Define waypoint pattern - point(lat, long, alt)
-    i = 1;
-    dist = Radius
-    advanceToggle = 1
-    strafeToggle = 1 
-    waypoint = initPoint
-    while i <= numLoops :
-        
-        if i % 2 == 0:
-            # Strafe 
-            waypoint = get_location_metres(waypoint, 0, (dist*(-1)**strafeToggle))
-            cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
-            strafeToggle ^= 1
-            dist += Radius
-            
-        else:
-            # Advance
-            waypoint = get_location_metres(waypoint, (dist*(-1)**advanceToggle), 0)
-            cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, waypoint.lat, waypoint.lon, alt))
-            advanceToggle ^= 1
-        i += 1
-
-    # Return to Launch
-    cmds.add(Command( 0, 0, 0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 0, 0, 0, 0, 0, initPoint.lat, initPoint.lon, alt))
-     
-    print " Upload new commands to vehicle"
-    cmds.upload()
-
-
-
-
 
 
 
@@ -427,18 +254,15 @@ def addsExpandSquare(initPoint, Area, alt):
 #
 # Set Mission
 print 'Create mission waypoints around current location.'
-initPoint = LocationGlobal(-43.522028, 172.577685, 10)
-Area = 10000
-alt = 10
+initPoint = vehicle.location.global_frame
 
 #################### Parallel Track Search
-##addsParallelTrack(Area, initPoint, alt)
+Area = 1000
+alt = 5
+initPoint = LocationGlobal(-43.522028, 172.577685, 5)
+addsParallelTrack(Area, initPoint, alt)
 
-#################### Sector Search
-addsSectorSearch(Area, initPoint, alt)
 
-#################### Expanding Square Search
-##addsExpandSquare(initPoint, Area, alt)
 
 
 # From Copter 3.3 you will be able to take off using a mission item. Plane must take off using a mission item (currently).
