@@ -180,6 +180,7 @@ def download_mission():
     cmds = vehicle.commands
     cmds.download()
     cmds.wait_ready() # wait until download is complete.
+    return cmds
 
 
 
@@ -414,7 +415,21 @@ def addsExpandSquare(initPoint, Area, alt):
     print " Upload new commands to vehicle"
     cmds.upload()
 
+
+def saveMission():
+    """
+    Saves remaining waypoints from current mission.
+    """
     
+    nextWaypoint = vehicle.commands.next
+    currMission = download_mission()
+    return currMission, nextWaypoint
+
+def resumeMission(nextWaypoint, Mission):
+    """
+    Function to return drone to current mission after user manual control is satisfied.
+    """
+
 
 def manControl():
     """
@@ -433,7 +448,7 @@ def manControl():
         addSectorSearch(float(Area), point, float(Alt))
     elif Pattern == 'PT':
         addsParallelTrack(float(Area), point, float(Alt))
-    elif Patten == 'ES':
+    elif Pattern == 'ES':
         addsExpandSquare(point, float(Area), float(Alt))
 
     vehicle.commands.next=0
@@ -495,6 +510,7 @@ while True:
             print s
             vehicle.mode = VehicleMode("GUIDED")
             manControl()
+            #resume current mission
     else:
         print "No input. Moving on..."
     
