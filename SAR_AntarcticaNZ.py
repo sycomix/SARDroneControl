@@ -9,6 +9,8 @@ from dronekit import connect, VehicleMode, LocationGlobalRelative, LocationGloba
 import time
 import math
 from pymavlink import mavutil
+import sys
+from select import select
 
 #########################################
 #
@@ -412,9 +414,31 @@ def addsExpandSquare(initPoint, Area, alt):
     print " Upload new commands to vehicle"
     cmds.upload()
 
+    
 
+def manControl():
+    """
+    Facilitates user manual control. User must specify required search pattern and waypoint.
+    """
+    
+    Pattern = raw_input("'SS' = Sector Search \n 'PT' = Parallel Track \n 'ES' = Expanding Square\nSpecify desired search pattern: ")
+    Lat = raw_input("Latitude: ")
+    Lon = raw_input("Longitude: ")
+    Area = raw_input("Specify search area (m2): ")
+    Alt = raw_input("Specify search altitude (m): ")
 
+    point = LocationGlobal(float(Lat), float(Lon), float(Alt))
+    
+    if Pattern == 'SS':
+        addSectorSearch(float(Area), point, float(Alt))
+    elif Pattern == 'PT':
+        addsParallelTrack(float(Area), point, float(Alt))
+    elif Patten == 'ES':
+        addsExpandSquare(point, float(Area), float(Alt))
 
+    vehicle.commands.next=0
+    vehicle.mode = VehicleMode("AUTO")
+        
 
 
 
@@ -460,7 +484,20 @@ vehicle.mode = VehicleMode("AUTO")
 while True:
     nextwaypoint=vehicle.commands.next
     print 'Distance to waypoint (%s): %s' % (nextwaypoint, distance_to_current_waypoint())
-  
+
+    #wait for user input
+    timeout = 2
+    print "Enter something:",
+    rlist, _, _ = select([sys.stdin], [], [], timeout)
+    if rlist:
+        s = raw_input()
+        if str(s) == 'GUIDED':
+            print s
+            vehicle.mode = VehicleMode("GUIDED")
+            manControl()
+    else:
+        print "No input. Moving on..."
+    
 
 ##      # Poll Beacon Signal (
 ##      # if Beacon recieved
