@@ -110,10 +110,7 @@ def getSSMeters(aLocation, alpha, dLat, dLon, turn):
 
 
 def condition_yaw(heading, relative=False):
-    if relative:
-        is_relative=1 #yaw relative to direction of travel
-    else:
-        is_relative=0 #yaw is an absolute angle
+    is_relative = 1 if relative else 0
     # create the CONDITION_YAW command using command_long_encode()
     msg = vehicle.message_factory.command_long_encode(
        0, 0,    # target system, target component
@@ -176,8 +173,9 @@ def distance_to_current_waypoint():
     lon = missionitem.y
     alt = missionitem.z
     targetWaypointLocation = LocationGlobalRelative(lat,lon,alt)
-    distancetopoint = get_distance_metres(vehicle.location.global_frame, targetWaypointLocation)
-    return distancetopoint
+    return get_distance_metres(
+        vehicle.location.global_frame, targetWaypointLocation
+    )
 
 
 def download_mission():
